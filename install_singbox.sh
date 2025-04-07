@@ -34,7 +34,13 @@ install_deps() {
 
 # 安装sing-box
 install_singbox() {
+    echo "正在获取最新sing-box版本..."
     LATEST_VERSION=$(curl -sL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | cut -d'"' -f4)
+    if [ -z "$LATEST_VERSION" ]; then
+        echo "无法获取最新版本，请检查网络连接"
+        exit 1
+    fi
+    
     echo "最新sing-box版本: $LATEST_VERSION"
     
     ARCH=$(uname -m)
@@ -47,7 +53,11 @@ install_singbox() {
     
     echo "下载sing-box..."
     DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-$LATEST_VERSION-linux-$ARCH.tar.gz"
-    curl -Lo sing-box.tar.gz "$DOWNLOAD_URL"
+    if ! curl -Lo sing-box.tar.gz "$DOWNLOAD_URL"; then
+        echo "下载失败，请检查URL是否正确: $DOWNLOAD_URL"
+        exit 1
+    fi
+    
     tar -xzf sing-box.tar.gz
     cp "sing-box-$LATEST_VERSION-linux-$ARCH/sing-box" /usr/local/bin/
     chmod +x /usr/local/bin/sing-box
@@ -93,7 +103,7 @@ generate_cert() {
 
 # 生成UUID
 generate_uuid() {
-    sing-box generate uuid
+    /usr/local/bin/sing-box generate uuid
 }
 
 # 生成密码
@@ -105,11 +115,27 @@ generate_password() {
 generate_config() {
     echo "生成sing-box配置..."
     
-    read -p "输入tuic监听端口 (默认: 11443): " TUIC_PORT
-    TUIC_PORT=${TUIC_PORT:-11443}
+    while true; do
+        read -p "输入tuic监听端口 (默认: 11443): " TUIC_PORT
+        TUIC_PORT=${TUIC_PORT:-11443}
+        
+        if [[ "$TUIC_PORT" =~ ^[0-9]+$ ]] && [ "$TUIC_PORT" -ge 1 ] && [ "$TUIC_PORT" -le 65535 ]; then
+            break
+        else
+            echo "错误：端口必须是1-65535之间的数字"
+        fi
+    done
     
-    read -p "输入hysteria2监听端口 (默认: 11543): " HYSTERIA_PORT
-    HYSTERIA_PORT=${HYSTERIA_PORT:-11543}
+    while true; do
+        read -p "输入hysteria2监听端口 (默认: 11543): " HYSTERIA_PORT
+        HYSTERIA_PORT=${HYSTERIA_PORT:-11543}
+        
+        if [[ "$HYSTERIA_PORT" =~ ^[0-9]+$ ]] && [ "$HYSTERIA_PORT" -ge 1 ] && [ "$HYSTERIA_PORT" -le 65535 ] && [ "$HYSTERIA_PORT" -ne "$TUIC_PORT" ]; then
+            break
+        else
+            echo "错误：端口必须是1-65535之间的数字且不能与tuic端口相同"
+        fi
+    done
     
     TUIC_UUID=$(generate_uuid)
     TUIC_PASSWORD=$(generate_password)
@@ -179,6 +205,7 @@ generate_config() {
 EOF
     
     # 显示配置信息
+    clear
     echo "================================"
     echo "配置信息:"
     echo "TUIC 配置:"
@@ -192,6 +219,8 @@ EOF
     echo "密码: $HYSTERIA_PASSWORD"
     echo "SNI: www.bing.com"
     echo "================================"
+    echo "这些信息已保存到 /etc/sing-box/config.json"
+    echo "请妥善保管这些连接信息"
 }
 
 # 创建控制脚本
@@ -225,6 +254,7 @@ case "\$1" in
         ;;
     *)
         echo "用法: sb {start|stop|restart|status|log|reconfig}"
+        exit 1
         ;;
 esac
 EOF
@@ -234,6 +264,8 @@ EOF
 
 # 主安装过程
 main_install() {
+    clear
+    echo "开始安装sing-box..."
     install_deps
     install_singbox
     generate_cert
@@ -255,12 +287,14 @@ main_install() {
 
 # 卸载
 uninstall() {
-    systemctl stop sing-box
-    systemctl disable sing-box
-    rm -f /etc/systemd/system/sing-box.service
-    rm -f /usr/local/bin/sing-box
-    rm -f /usr/local/bin/sb
-    rm -rf /etc/sing-box
+    clear
+    echo "开始卸载sing-box..."
+    systemctl stop sing-box 2>/dev/null
+    systemctl disable sing-box 2>/dev/null
+    rm -f /etc/systemd/system/sing-box.service 2>/dev/null
+    rm -f /usr/local/bin/sing-box 2>/dev/null
+    rm -f /usr/local/bin/sb 2>/dev/null
+    rm -rf /etc/sing-box 2>/dev/null
     systemctl daemon-reload
     
     echo "sing-box 已卸载"
@@ -268,6 +302,7 @@ uninstall() {
 
 # 显示菜单
 show_menu() {
+    clear
     echo "================================"
     echo " sing-box 安装脚本"
     echo "================================"
@@ -275,14 +310,17 @@ show_menu() {
     echo "2. 卸载 sing-box"
     echo "3. 退出"
     echo "================================"
-    read -p "请输入选项 (1-3): " OPTION
     
-    case "$OPTION" in
-        1) main_install ;;
-        2) uninstall ;;
-        3) exit 0 ;;
-        *) echo "无效选项"; exit 1 ;;
-    esac
+    while true; do
+        read -p "请输入选项 (1-3): " OPTION
+        case "$OPTION" in
+            1) main_install; break ;;
+            2) uninstall; break ;;
+            3) exit 0 ;;
+            *) echo "无效选项，请输入1-3之间的数字" ;;
+        esac
+    done
 }
 
+# 主入口
 show_menu
