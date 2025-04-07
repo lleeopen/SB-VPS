@@ -6,6 +6,12 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
 # 检测系统
 detect_system() {
     if [ -f /etc/alpine-release ]; then
@@ -22,7 +28,7 @@ SYSTEM=$(detect_system)
 
 # 安装依赖
 install_deps() {
-    echo "安装系统依赖..."
+    echo -e "${YELLOW}安装系统依赖...${NC}"
     if [ "$SYSTEM" = "alpine" ]; then
         apk update
         apk add --no-cache bash openssl curl jq openssh-client
@@ -34,27 +40,27 @@ install_deps() {
 
 # 安装sing-box
 install_singbox() {
-    echo "正在获取最新sing-box版本..."
+    echo -e "${YELLOW}正在获取最新sing-box版本...${NC}"
     LATEST_VERSION=$(curl -sL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | cut -d'"' -f4)
     if [ -z "$LATEST_VERSION" ]; then
-        echo "无法获取最新版本，请检查网络连接"
+        echo -e "${RED}无法获取最新版本，请检查网络连接${NC}"
         exit 1
     fi
     
-    echo "最新sing-box版本: $LATEST_VERSION"
+    echo -e "${GREEN}最新sing-box版本: ${LATEST_VERSION}${NC}"
     
     ARCH=$(uname -m)
     case "$ARCH" in
         "x86_64") ARCH="amd64" ;;
         "aarch64") ARCH="arm64" ;;
         "armv7l") ARCH="armv7" ;;
-        *) echo "不支持的架构: $ARCH"; exit 1 ;;
+        *) echo -e "${RED}不支持的架构: $ARCH${NC}"; exit 1 ;;
     esac
     
-    echo "下载sing-box..."
+    echo -e "${YELLOW}下载sing-box...${NC}"
     DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-$LATEST_VERSION-linux-$ARCH.tar.gz"
-    if ! curl -Lo sing-box.tar.gz "$DOWNLOAD_URL"; then
-        echo "下载失败，请检查URL是否正确: $DOWNLOAD_URL"
+    if ! curl -fLo sing-box.tar.gz "$DOWNLOAD_URL"; then
+        echo -e "${RED}下载失败，请检查URL是否正确: $DOWNLOAD_URL${NC}"
         exit 1
     fi
     
@@ -90,7 +96,7 @@ EOF
 
 # 生成自签证书
 generate_cert() {
-    echo "为www.bing.com生成自签证书..."
+    echo -e "${YELLOW}为www.bing.com生成自签证书...${NC}"
     mkdir -p /etc/sing-box/certs
     openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
         -keyout /etc/sing-box/certs/key.pem \
@@ -113,7 +119,7 @@ generate_password() {
 
 # 生成配置
 generate_config() {
-    echo "生成sing-box配置..."
+    echo -e "${YELLOW}生成sing-box配置...${NC}"
     
     while true; do
         read -p "输入tuic监听端口 (默认: 11443): " TUIC_PORT
@@ -122,7 +128,7 @@ generate_config() {
         if [[ "$TUIC_PORT" =~ ^[0-9]+$ ]] && [ "$TUIC_PORT" -ge 1 ] && [ "$TUIC_PORT" -le 65535 ]; then
             break
         else
-            echo "错误：端口必须是1-65535之间的数字"
+            echo -e "${RED}错误：端口必须是1-65535之间的数字${NC}"
         fi
     done
     
@@ -130,10 +136,14 @@ generate_config() {
         read -p "输入hysteria2监听端口 (默认: 11543): " HYSTERIA_PORT
         HYSTERIA_PORT=${HYSTERIA_PORT:-11543}
         
-        if [[ "$HYSTERIA_PORT" =~ ^[0-9]+$ ]] && [ "$HYSTERIA_PORT" -ge 1 ] && [ "$HYSTERIA_PORT" -le 65535 ] && [ "$HYSTERIA_PORT" -ne "$TUIC_PORT" ]; then
-            break
+        if [[ "$HYSTERIA_PORT" =~ ^[0-9]+$ ]] && [ "$HYSTERIA_PORT" -ge 1 ] && [ "$HYSTERIA_PORT" -le 65535 ]; then
+            if [ "$HYSTERIA_PORT" -ne "$TUIC_PORT" ]; then
+                break
+            else
+                echo -e "${RED}错误：端口不能与tuic端口相同${NC}"
+            fi
         else
-            echo "错误：端口必须是1-65535之间的数字且不能与tuic端口相同"
+            echo -e "${RED}错误：端口必须是1-65535之间的数字${NC}"
         fi
     done
     
@@ -206,7 +216,7 @@ EOF
     
     # 显示配置信息
     clear
-    echo "================================"
+    echo -e "${GREEN}================================"
     echo "配置信息:"
     echo "TUIC 配置:"
     echo "端口: $TUIC_PORT"
@@ -218,9 +228,9 @@ EOF
     echo "端口: $HYSTERIA_PORT"
     echo "密码: $HYSTERIA_PASSWORD"
     echo "SNI: www.bing.com"
-    echo "================================"
-    echo "这些信息已保存到 /etc/sing-box/config.json"
-    echo "请妥善保管这些连接信息"
+    echo -e "================================${NC}"
+    echo -e "${YELLOW}这些信息已保存到 /etc/sing-box/config.json"
+    echo -e "请妥善保管这些连接信息${NC}"
 }
 
 # 创建控制脚本
@@ -265,7 +275,7 @@ EOF
 # 主安装过程
 main_install() {
     clear
-    echo "开始安装sing-box..."
+    echo -e "${GREEN}开始安装sing-box...${NC}"
     install_deps
     install_singbox
     generate_cert
@@ -275,20 +285,20 @@ main_install() {
     # 启动服务
     systemctl enable --now sing-box
     
-    echo "安装完成！"
-    echo "使用 'sb' 命令控制sing-box:"
+    echo -e "${GREEN}安装完成！${NC}"
+    echo -e "${YELLOW}使用 'sb' 命令控制sing-box:"
     echo "  sb start     - 启动服务"
     echo "  sb stop      - 停止服务"
     echo "  sb restart   - 重启服务"
     echo "  sb status    - 查看状态"
     echo "  sb log       - 查看日志"
-    echo "  sb reconfig  - 重新生成配置"
+    echo -e "  sb reconfig  - 重新生成配置${NC}"
 }
 
 # 卸载
 uninstall() {
     clear
-    echo "开始卸载sing-box..."
+    echo -e "${YELLOW}开始卸载sing-box...${NC}"
     systemctl stop sing-box 2>/dev/null
     systemctl disable sing-box 2>/dev/null
     rm -f /etc/systemd/system/sing-box.service 2>/dev/null
@@ -297,19 +307,19 @@ uninstall() {
     rm -rf /etc/sing-box 2>/dev/null
     systemctl daemon-reload
     
-    echo "sing-box 已卸载"
+    echo -e "${GREEN}sing-box 已卸载${NC}"
 }
 
 # 显示菜单
 show_menu() {
     clear
-    echo "================================"
+    echo -e "${GREEN}================================"
     echo " sing-box 安装脚本"
     echo "================================"
-    echo "1. 安装 sing-box (包含tuic和hysteria2)"
+    echo -e "${YELLOW}1. 安装 sing-box (包含tuic和hysteria2)"
     echo "2. 卸载 sing-box"
-    echo "3. 退出"
-    echo "================================"
+    echo -e "3. 退出${NC}"
+    echo -e "${GREEN}================================"
     
     while true; do
         read -p "请输入选项 (1-3): " OPTION
@@ -317,7 +327,7 @@ show_menu() {
             1) main_install; break ;;
             2) uninstall; break ;;
             3) exit 0 ;;
-            *) echo "无效选项，请输入1-3之间的数字" ;;
+            *) echo -e "${RED}无效选项，请输入1-3之间的数字${NC}" ;;
         esac
     done
 }
