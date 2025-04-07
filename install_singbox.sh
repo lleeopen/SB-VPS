@@ -1,178 +1,115 @@
 #!/bin/bash
 
+# 确保使用Bash执行（Debian默认dash可能导致问题）
+if [ -z "$BASH_VERSION" ]; then
+    exec bash "$0" "$@"
+fi
+
 # 检查root权限
 if [ "$(id -u)" -ne 0 ]; then
-    echo "请使用root用户运行此脚本！"
+    echo -e "\033[31m请使用root用户运行此脚本！\033[0m"
     exit 1
 fi
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m' # No Color
+# 安装必要依赖（针对Debian 11特别处理）
+check_deps() {
+    local missing=()
+    for cmd in curl tar openssl systemctl; do
+        if ! command -v $cmd &> /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
 
-# 检测系统
-detect_system() {
-    if [ -f /etc/alpine-release ]; then
-        echo "alpine"
-    elif [ -f /etc/debian_version ]; then
-        echo "debian"
-    else
-        echo "未知系统，脚本将退出"
-        exit 1
-    fi
-}
-
-SYSTEM=$(detect_system)
-
-# 安装依赖
-install_deps() {
-    echo -e "${YELLOW}安装系统依赖...${NC}"
-    if [ "$SYSTEM" = "alpine" ]; then
-        apk update
-        apk add --no-cache bash openssl curl jq openssh-client
-    elif [ "$SYSTEM" = "debian" ]; then
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "\033[33m安装依赖: ${missing[*]}...\033[0m"
         apt update
-        apt install -y bash openssl curl jq openssh-client
+        apt install -y ${missing[@]}
     fi
 }
 
 # 安装sing-box
 install_singbox() {
-    echo -e "${YELLOW}正在获取最新sing-box版本...${NC}"
-    LATEST_VERSION=$(curl -sL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | cut -d'"' -f4)
-    if [ -z "$LATEST_VERSION" ]; then
-        echo -e "${RED}无法获取最新版本，请检查网络连接${NC}"
-        exit 1
-    fi
-    
-    echo -e "${GREEN}最新sing-box版本: ${LATEST_VERSION}${NC}"
-    
+    echo -e "\033[32m正在获取最新sing-box版本...\033[0m"
+    LATEST_VER=$(curl -sL https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | cut -d'"' -f4)
+    [ -z "$LATEST_VER" ] && { echo -e "\033[31m获取版本失败\033[0m"; exit 1; }
+
     ARCH=$(uname -m)
     case "$ARCH" in
-        "x86_64") ARCH="amd64" ;;
-        "aarch64") ARCH="arm64" ;;
-        "armv7l") ARCH="armv7" ;;
-        *) echo -e "${RED}不支持的架构: $ARCH${NC}"; exit 1 ;;
+        x86_64) ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+        armv7l) ARCH="armv7" ;;
+        *) echo -e "\033[31m不支持的架构: $ARCH\033[0m"; exit 1 ;;
     esac
-    
-    echo -e "${YELLOW}下载sing-box...${NC}"
-    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/$LATEST_VERSION/sing-box-$LATEST_VERSION-linux-$ARCH.tar.gz"
-    if ! curl -fLo sing-box.tar.gz "$DOWNLOAD_URL"; then
-        echo -e "${RED}下载失败，请检查URL是否正确: $DOWNLOAD_URL${NC}"
+
+    echo -e "\033[32m下载sing-box ${LATEST_VER}...\033[0m"
+    URL="https://github.com/SagerNet/sing-box/releases/download/${LATEST_VER}/sing-box-${LATEST_VER}-linux-${ARCH}.tar.gz"
+    if ! curl -Lo sing-box.tar.gz "$URL"; then
+        echo -e "\033[31m下载失败！\033[0m"
         exit 1
     fi
-    
+
     tar -xzf sing-box.tar.gz
-    cp "sing-box-$LATEST_VERSION-linux-$ARCH/sing-box" /usr/local/bin/
+    cp sing-box-*/sing-box /usr/local/bin/
     chmod +x /usr/local/bin/sing-box
-    
-    # 创建配置目录
-    mkdir -p /etc/sing-box
-    
-    # 创建systemd服务
+
+    # 创建服务文件
     cat > /etc/systemd/system/sing-box.service <<EOF
 [Unit]
 Description=sing-box service
-After=network.target nss-lookup.target
+After=network.target
 
 [Service]
-User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=on-failure
-RestartSec=10
+Restart=always
+User=root
 LimitNOFILE=infinity
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+
     systemctl daemon-reload
-    rm -rf "sing-box-$LATEST_VERSION-linux-$ARCH" sing-box.tar.gz
-}
-
-# 生成自签证书
-generate_cert() {
-    echo -e "${YELLOW}为www.bing.com生成自签证书...${NC}"
-    mkdir -p /etc/sing-box/certs
-    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout /etc/sing-box/certs/key.pem \
-        -out /etc/sing-box/certs/cert.pem \
-        -subj "/CN=www.bing.com" \
-        -days 3650
-    
-    chmod 600 /etc/sing-box/certs/*.pem
-}
-
-# 生成UUID
-generate_uuid() {
-    /usr/local/bin/sing-box generate uuid
-}
-
-# 生成密码
-generate_password() {
-    openssl rand -hex 8
+    rm -rf sing-box.tar.gz sing-box-*
 }
 
 # 生成配置
 generate_config() {
-    echo -e "${YELLOW}生成sing-box配置...${NC}"
-    
-    while true; do
-        read -p "输入tuic监听端口 (默认: 11443): " TUIC_PORT
-        TUIC_PORT=${TUIC_PORT:-11443}
-        
-        if [[ "$TUIC_PORT" =~ ^[0-9]+$ ]] && [ "$TUIC_PORT" -ge 1 ] && [ "$TUIC_PORT" -le 65535 ]; then
-            break
-        else
-            echo -e "${RED}错误：端口必须是1-65535之间的数字${NC}"
-        fi
+    local tuic_port hysteria_port
+
+    while :; do
+        read -p "输入TUIC监听端口 [默认: 11443]: " tuic_port
+        tuic_port=${tuic_port:-11443}
+        [[ $tuic_port =~ ^[0-9]+$ ]] && [ $tuic_port -gt 0 -a $tuic_port -lt 65536 ] && break
+        echo -e "\033[31m无效端口！请输入1-65535之间的数字\033[0m"
     done
-    
-    while true; do
-        read -p "输入hysteria2监听端口 (默认: 11543): " HYSTERIA_PORT
-        HYSTERIA_PORT=${HYSTERIA_PORT:-11543}
-        
-        if [[ "$HYSTERIA_PORT" =~ ^[0-9]+$ ]] && [ "$HYSTERIA_PORT" -ge 1 ] && [ "$HYSTERIA_PORT" -le 65535 ]; then
-            if [ "$HYSTERIA_PORT" -ne "$TUIC_PORT" ]; then
-                break
-            else
-                echo -e "${RED}错误：端口不能与tuic端口相同${NC}"
-            fi
-        else
-            echo -e "${RED}错误：端口必须是1-65535之间的数字${NC}"
-        fi
+
+    while :; do
+        read -p "输入Hysteria2监听端口 [默认: 11543]: " hysteria_port
+        hysteria_port=${hysteria_port:-11543}
+        [[ $hysteria_port =~ ^[0-9]+$ ]] && [ $hysteria_port -gt 0 -a $hysteria_port -lt 65536 ] && [ $hysteria_port -ne $tuic_port ] && break
+        echo -e "\033[31m无效端口！请输入1-65535之间且不同于TUIC端口的数字\033[0m"
     done
-    
-    TUIC_UUID=$(generate_uuid)
-    TUIC_PASSWORD=$(generate_password)
-    HYSTERIA_PASSWORD=$(generate_password)
-    
+
+    mkdir -p /etc/sing-box/certs
+    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -keyout /etc/sing-box/certs/key.pem \
+        -out /etc/sing-box/certs/cert.pem \
+        -subj "/CN=www.bing.com" -days 3650
+
+    local uuid=$(/usr/local/bin/sing-box generate uuid)
+    local tuic_pass=$(openssl rand -hex 8)
+    local hysteria_pass=$(openssl rand -hex 8)
+
     cat > /etc/sing-box/config.json <<EOF
 {
-    "log": {
-        "level": "info",
-        "timestamp": true
-    },
+    "log": {"level": "info"},
     "inbounds": [
         {
             "type": "tuic",
-            "tag": "tuic-in",
             "listen": "::",
-            "listen_port": $TUIC_PORT,
-            "tcp_fast_open": true,
+            "listen_port": $tuic_port,
             "sniff": true,
-            "sniff_override_destination": true,
-            "users": [
-                {
-                    "uuid": "$TUIC_UUID",
-                    "password": "$TUIC_PASSWORD"
-                }
-            ],
-            "congestion_control": "bbr",
+            "users": [{"uuid": "$uuid", "password": "$tuic_pass"}],
             "tls": {
                 "enabled": true,
                 "server_name": "www.bing.com",
@@ -182,17 +119,9 @@ generate_config() {
         },
         {
             "type": "hysteria2",
-            "tag": "hysteria2-in",
             "listen": "::",
-            "listen_port": $HYSTERIA_PORT,
-            "tcp_fast_open": true,
-            "sniff": true,
-            "sniff_override_destination": true,
-            "users": [
-                {
-                    "password": "$HYSTERIA_PASSWORD"
-                }
-            ],
+            "listen_port": $hysteria_port,
+            "users": [{"password": "$hysteria_pass"}],
             "tls": {
                 "enabled": true,
                 "server_name": "www.bing.com",
@@ -202,65 +131,37 @@ generate_config() {
         }
     ],
     "outbounds": [
-        {
-            "type": "direct",
-            "tag": "direct"
-        },
-        {
-            "type": "block",
-            "tag": "block"
-        }
+        {"type": "direct", "tag": "direct"},
+        {"type": "block", "tag": "block"}
     ]
 }
 EOF
-    
-    # 显示配置信息
-    clear
-    echo -e "${GREEN}================================"
-    echo "配置信息:"
-    echo "TUIC 配置:"
-    echo "端口: $TUIC_PORT"
-    echo "UUID: $TUIC_UUID"
-    echo "密码: $TUIC_PASSWORD"
-    echo "SNI: www.bing.com"
-    echo "------------------------"
-    echo "Hysteria2 配置:"
-    echo "端口: $HYSTERIA_PORT"
-    echo "密码: $HYSTERIA_PASSWORD"
-    echo "SNI: www.bing.com"
-    echo -e "================================${NC}"
-    echo -e "${YELLOW}这些信息已保存到 /etc/sing-box/config.json"
-    echo -e "请妥善保管这些连接信息${NC}"
+
+    echo -e "\n\033[32m配置生成成功！\033[0m"
+    echo -e "TUIC配置:"
+    echo -e "端口: \033[33m$tuic_port\033[0m"
+    echo -e "UUID: \033[33m$uuid\033[0m"
+    echo -e "密码: \033[33m$tuic_pass\033[0m"
+    echo -e "Hysteria2配置:"
+    echo -e "端口: \033[33m$hysteria_port\033[0m"
+    echo -e "密码: \033[33m$hysteria_pass\033[0m"
+    echo -e "TLS SNI: \033[33mwww.bing.com\033[0m"
 }
 
-# 创建控制脚本
+# 控制命令
 create_control_script() {
-    cat > /usr/local/bin/sb <<EOF
+    cat > /usr/local/bin/sb <<'EOF'
 #!/bin/bash
-
-case "\$1" in
-    "start")
-        systemctl start sing-box
-        echo "sing-box 已启动"
+case "$1" in
+    start|stop|restart|status)
+        systemctl $1 sing-box
         ;;
-    "stop")
-        systemctl stop sing-box
-        echo "sing-box 已停止"
-        ;;
-    "restart")
-        systemctl restart sing-box
-        echo "sing-box 已重启"
-        ;;
-    "status")
-        systemctl status sing-box
-        ;;
-    "log")
+    log)
         journalctl -u sing-box -f
         ;;
-    "reconfig")
-        generate_config
+    reconfig)
+        /usr/local/bin/sing-box generate config > /etc/sing-box/config.json
         systemctl restart sing-box
-        echo "配置已重新生成并重启服务"
         ;;
     *)
         echo "用法: sb {start|stop|restart|status|log|reconfig}"
@@ -268,69 +169,48 @@ case "\$1" in
         ;;
 esac
 EOF
-    
     chmod +x /usr/local/bin/sb
 }
 
-# 主安装过程
-main_install() {
-    clear
-    echo -e "${GREEN}开始安装sing-box...${NC}"
-    install_deps
-    install_singbox
-    generate_cert
-    generate_config
-    create_control_script
-    
-    # 启动服务
-    systemctl enable --now sing-box
-    
-    echo -e "${GREEN}安装完成！${NC}"
-    echo -e "${YELLOW}使用 'sb' 命令控制sing-box:"
-    echo "  sb start     - 启动服务"
-    echo "  sb stop      - 停止服务"
-    echo "  sb restart   - 重启服务"
-    echo "  sb status    - 查看状态"
-    echo "  sb log       - 查看日志"
-    echo -e "  sb reconfig  - 重新生成配置${NC}"
-}
-
-# 卸载
-uninstall() {
-    clear
-    echo -e "${YELLOW}开始卸载sing-box...${NC}"
-    systemctl stop sing-box 2>/dev/null
-    systemctl disable sing-box 2>/dev/null
-    rm -f /etc/systemd/system/sing-box.service 2>/dev/null
-    rm -f /usr/local/bin/sing-box 2>/dev/null
-    rm -f /usr/local/bin/sb 2>/dev/null
-    rm -rf /etc/sing-box 2>/dev/null
-    systemctl daemon-reload
-    
-    echo -e "${GREEN}sing-box 已卸载${NC}"
-}
-
-# 显示菜单
+# 主菜单
 show_menu() {
     clear
-    echo -e "${GREEN}================================"
-    echo " sing-box 安装脚本"
-    echo "================================"
-    echo -e "${YELLOW}1. 安装 sing-box (包含tuic和hysteria2)"
+    echo -e "\033[36m================================="
+    echo " Sing-box 安装管理脚本 (Debian 11)"
+    echo "================================="
+    echo -e "\033[32m1. 安装并配置 sing-box"
     echo "2. 卸载 sing-box"
-    echo -e "3. 退出${NC}"
-    echo -e "${GREEN}================================"
-    
-    while true; do
-        read -p "请输入选项 (1-3): " OPTION
-        case "$OPTION" in
-            1) main_install; break ;;
-            2) uninstall; break ;;
-            3) exit 0 ;;
-            *) echo -e "${RED}无效选项，请输入1-3之间的数字${NC}" ;;
+    echo -e "3. 退出脚本\033[0m"
+    echo -e "\033[36m=================================\033[0m"
+
+    while :; do
+        read -p "请输入选择 [1-3]: " choice
+        case $choice in
+            1)
+                check_deps
+                install_singbox
+                generate_config
+                create_control_script
+                systemctl enable --now sing-box
+                echo -e "\033[32m安装完成！使用 'sb' 命令管理服务\033[0m"
+                break
+                ;;
+            2)
+                systemctl stop sing-box 2>/dev/null
+                systemctl disable sing-box 2>/dev/null
+                rm -rf /usr/local/bin/sing-box /usr/local/bin/sb /etc/sing-box
+                echo -e "\033[32m已卸载 sing-box\033[0m"
+                break
+                ;;
+            3)
+                exit 0
+                ;;
+            *)
+                echo -e "\033[31m无效输入！请输入1-3之间的数字\033[0m"
+                ;;
         esac
     done
 }
 
-# 主入口
+# 启动脚本
 show_menu
